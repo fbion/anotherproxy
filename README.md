@@ -1,19 +1,32 @@
-Another DNS Proxy
-=================
+Another Proxy
+=============
 
-Quick and dirty way to provide a local DNS resolver that forwards requests over SOCKS5 (think: SSH).
+Quick and dirty local DNS resolver and HTTP/HTTPS proxy that forwards requests over SOCKS5 (think: SSH -D9050).
 ```
-Usage of ./anotherdnsproxy:
-  -address string
-    	Address to listen to (TCP and UDP) (default "127.0.0.1:53")
-  -dns string
-    	DNS server (default "8.8.8.8:53")
+Usage of anotherproxy:
+  -httpproxy string
+        Address:port for local HTTP proxy (default "127.0.0.1:8080")
+  -localdns string
+        Address:port for local DNS requests (default "127.0.0.1:53")
+  -remotedns string
+        Address:port of upstream DNS server (default "8.8.8.8:53")
   -runtests
-    	Run internal tests
+        Run internal tests
   -socks5 string
-    	SOCKS5 address and port
+        SOCKS5 address:port
 ```
-e.g.,
-```bash$ ./anotherdnsproxy -socks5=:9123```
 
-<3 to github.com/miekg/dns
+e.g.,
+```
+./anotherdnsproxy -socks5="127.0.0.1:9050" \
+-httpproxy="192.168.1.5:8080" \
+-localdns="192.168.1.5:53"
+```
+
+## Install notes
+```
+go install github.com/zeroshirts/anotherproxy
+sudo setcap 'cap_net_bind_service=+ep' $GOPATH/bin/anotherproxy
+```
+
+Major thanks to github.com/miekg/dns and github.com/elazarl/goproxy
