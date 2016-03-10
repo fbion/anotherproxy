@@ -18,7 +18,7 @@ Usage of anotherproxy:
 
 e.g.,
 ```
-./anotherdnsproxy -socks5="127.0.0.1:9050" \
+./anotherproxy -socks5="127.0.0.1:9050" \
 -httpproxy="192.168.1.5:8080" \
 -localdns="192.168.1.5:53"
 ```
@@ -29,4 +29,4 @@ go install github.com/zeroshirts/anotherproxy
 sudo setcap 'cap_net_bind_service=+ep' $GOPATH/bin/anotherproxy
 ```
 
-Major thanks to github.com/miekg/dns and github.com/elazarl/goproxy
+:heart: Major thanks to github.com/miekg/dns and github.com/elazarl/goproxy
