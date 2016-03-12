@@ -11,9 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"runtime"
-	"sync"
 	"time"
 )
 
@@ -36,7 +34,6 @@ var (
 	_socks5Proxy = flag.String("socks5", "", "SOCKS5 address:port")
 	_httpProxy   = flag.String("httpproxy", "127.0.0.1:8080", "Address:port for local HTTP proxy")
 	_remoteDNS   = flag.String("remotedns", "8.8.8.8:53", "Address:port of upstream DNS server")
-	_runTests    = flag.Bool("runtests", false, "Run internal tests")
 )
 
 func isTransfer(req *dns.Msg) bool {
@@ -150,22 +147,20 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 		return
 	}
 
-	// XXX check req, see if we're resolving imap.gmail.com or smtp.gmail.com, and respond w/ 10.0.2.51....
-
 	responseChan := make(chan proxyResponse, 0)
 	jobQueue <- proxyRequest{req, responseChan}
 	x := <-responseChan
 	close(responseChan)
 
 	if x.err != nil {
-		log.Print("ERROR: " + x.err.Error())
+		log.Print(x.err.Error() + " on request " + req.String())
 		dns.HandleFailed(w, req)
 		return
 	}
 
 	// assuming miekg/dns handles possible indefinite write blocking
 	if err := w.WriteMsg(x.Msg); err != nil {
-		log.Print("ERROR:" + err.Error())
+		log.Print(err.Error() + " on request " + req.String())
 		dns.HandleFailed(w, req)
 		return
 	}
@@ -208,8 +203,7 @@ func (s *server) Shutdown() error {
 	if err := s.tcpServer.Shutdown(); err != nil {
 		errors = append(errors, err)
 	}
-	// TODO: shutdown http proxy, too!
-	//if err := s.httpProxy.
+	// TODO: shutdown http proxy, too!  don't know how to do this right now.
 
 	if len(errors) > 0 {
 		return errors[0]
@@ -218,44 +212,54 @@ func (s *server) Shutdown() error {
 }
 
 func (s *server) ListenAndServe() error {
-	var wg sync.WaitGroup
-	wg.Add(3)
-	errors := make(chan error, 2)
+	resChan := make(chan error, 4)
 	go func() {
-		defer wg.Done()
-		if err := s.udpServer.ListenAndServe(); err != nil {
-			errors <- err
-		}
+		resChan <- s.udpServer.ListenAndServe()
 	}()
 	go func() {
-		defer wg.Done()
-		if err := s.tcpServer.ListenAndServe(); err != nil {
-			errors <- err
-		}
+		resChan <- s.tcpServer.ListenAndServe()
 	}()
 	go func() {
-		defer wg.Done()
-		if err := http.ListenAndServe(s.httpProxyAddress, s.httpProxyServer); err != nil {
-			errors <- err
-		}
+		resChan <- http.ListenAndServe(s.httpProxyAddress, s.httpProxyServer)
 	}()
 
-	wg.Wait()
-	select {
-	case err := <-errors:
-		// ignore possible second error
-		return err
-	default:
-		return nil
+	// Runtime test
+	go func() {
+		// Don't have elegant way to know when udp-dns/tcp-dns/http-proxy have started, so wait...
+		time.Sleep(2 * time.Second)
+
+		m := new(dns.Msg)
+		m.SetQuestion("miek.nl.", dns.TypeSOA)
+
+		c := new(dns.Client)
+		r, _, err := c.Exchange(m, s.udpServer.Addr)
+		if err != nil {
+			resChan <- err
+			return
+		}
+		if r != nil && r.Rcode != dns.RcodeSuccess {
+			resChan <- fmt.Errorf("failed to get valid answer\n%v", r)
+			return
+		}
+		log.Printf("Quick test passed of %q", m.String())
+	}()
+
+	// Return first error early, don't block on all subsystems returning
+	for i := 0; i < cap(resChan); i++ {
+		if err := <-resChan; err != nil {
+			// ignore other potential errors in resChan
+			return err
+		}
 	}
+	return nil
 }
 
-func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers int) *server {
+func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers int) (*server, error) {
 	if socks5Proxy == "" {
-		panic("No SOCKS5 proxy specified")
+		return nil, errors.New("No SOCKS5 proxy specified")
 	}
 	if httpProxy == "" {
-		panic("No HTTP proxy specified")
+		return nil, errors.New("No HTTP proxy specified")
 	}
 
 	log.Printf("Using SOCKS5 proxy %v", socks5Proxy)
@@ -263,11 +267,15 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 	log.Printf("Upstream DNS %v", remoteDNS)
 	log.Printf("HTTP proxy address %v", httpProxy)
 
-	dns_dlr := &dialer{remoteDNS, socks5Proxy}
+	dns_dialer := &dialer{remoteDNS, socks5Proxy}
+	http_dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
+	if err != nil {
+		return nil, err
+	}
 
 	jobQueue := make(chan proxyRequest, numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		go proxyWorker(jobQueue, dns_dlr)
+		go proxyWorker(jobQueue, dns_dialer)
 	}
 
 	serveMux := dns.NewServeMux()
@@ -288,11 +296,6 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 	}
 
 	httpProxyServer := goproxy.NewProxyHttpServer()
-	http_dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
-	if err != nil {
-		panic(err)
-	}
-
 	httpProxyServer.Tr = &http.Transport{
 		Dial: http_dialer.Dial,
 	}
@@ -300,7 +303,7 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 
 	httpProxyServer.OnRequest().DoFunc(
 		func(r *http.Request, ctx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
-			r.Header.Set("X-Foo", "YeeHaw Yo")
+			//r.Header.Set("X-Foo", "BarBaz")
 			return r, nil
 		},
 	)
@@ -315,38 +318,7 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 	// ignore errors; would get 'server not started' error if client never kicks
 	// off server.
 	runtime.SetFinalizer(s, (*server).Shutdown)
-	return s
-}
-
-func runTests(s *server) error {
-	errors := make(chan error, 1)
-	go func() {
-		errors <- s.ListenAndServe()
-	}()
-
-	// HACK/TODO: replace with onstartup notifier hooks so we know when server has started
-	log.Print("testing...")
-	time.Sleep(1 * time.Second)
-
-	m := new(dns.Msg)
-	m.SetQuestion("miek.nl.", dns.TypeSOA)
-
-	c := new(dns.Client)
-	r, _, err := c.Exchange(m, s.udpServer.Addr)
-	if err != nil {
-		return err
-	}
-	if r != nil && r.Rcode != dns.RcodeSuccess {
-		err := fmt.Errorf("failed to get an valid answer\n%v", r)
-		return err
-	}
-	select {
-	case err := <-errors:
-		return err
-	default:
-		log.Print("success!")
-		return nil
-	}
+	return s, nil
 }
 
 // TODO: round robin remote DNS support?  i.e. use 8.8.8.8 and 8.8.4.4?
@@ -358,12 +330,9 @@ func runTests(s *server) error {
 func main() {
 	flag.Parse()
 	numWorkers := runtime.NumCPU() * 4
-	s := newServer(*_localDNS, *_remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
-	if *_runTests {
-		if err := runTests(s); err != nil {
-			log.Fatal(err)
-		}
-		os.Exit(0)
+	s, err := newServer(*_localDNS, *_remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	if err := s.ListenAndServe(); err != nil {
