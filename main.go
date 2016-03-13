@@ -22,7 +22,11 @@ Other miekg/dns implementations:
 - https://github.com/googollee/dnsproxy/blob/master/client.go
 - https://github.com/DJDNS/djdns
 
-TODO: print some DNS stats every 5min?
+TODO: print some DNS stats every 5min? or.. just dump this to a log collector and do queries there..
+
+
+TODO: round robin and/orfailover remote DNS support?  no response from 8.8.8.8, so use 8.8.4.4?
+TODO: singleflight optimization?
 
 */
 
@@ -186,8 +190,6 @@ type server struct {
 	tcpServer        *dns.Server
 	httpProxyServer  *goproxy.ProxyHttpServer
 	httpProxyAddress string
-
-	// Track and report all errors
 }
 
 /*
@@ -317,12 +319,6 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 	return s, nil
 }
 
-// TODO: round robin remote DNS support?  i.e. use 8.8.8.8 and 8.8.4.4?
-// TODO: failover DNS support?  i.e., 8.8.8.8 doesn't work, so use 8.8.4.4?
-// TODO: singleflight optimization?
-
-// Test with:
-// bash$ nslookup github.com. @127.0.0.1
 func main() {
 	flag.Parse()
 	numWorkers := runtime.NumCPU() * 4
