@@ -227,7 +227,7 @@ func (s *server) ListenAndServe() error {
 		time.Sleep(2 * time.Second)
 
 		m := new(dns.Msg)
-		m.SetQuestion("miek.nl.", dns.TypeSOA)
+		m.SetQuestion("google.com.", dns.TypeSOA)
 
 		c := new(dns.Client)
 		r, _, err := c.Exchange(m, s.udpServer.Addr)
@@ -236,7 +236,7 @@ func (s *server) ListenAndServe() error {
 				err = fmt.Errorf("invalid answer: %q", r)
 			}
 		}
-		if err != nil {
+		if err == nil {
 			log.Printf("Quick test passed of %q", m.String())
 		}
 		resChan <- err
