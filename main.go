@@ -22,11 +22,13 @@ Other miekg/dns implementations:
 - https://github.com/googollee/dnsproxy/blob/master/client.go
 - https://github.com/DJDNS/djdns
 
-TODO: print some DNS stats every 5min? or.. just dump this to a log collector and do queries there..
-
-
-TODO: round robin and/orfailover remote DNS support?  no response from 8.8.8.8, so use 8.8.4.4?
+TODO: stats every 5 min?  or dump to collector/query engine and handle there?
 TODO: singleflight optimization?
+
+
+NEXT NEXT TODO: round robin and/or failover remote DNS support?  no response from 8.8.8.8, so use 8.8.4.4?
+https://golang.org/pkg/flag/#example_
+
 
 */
 
