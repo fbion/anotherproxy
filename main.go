@@ -24,9 +24,6 @@ Other miekg/dns implementations:
 
 TODO: print some DNS stats every 5min?
 
-TODO: always do -runtests behavior.. add flag to skip this..
-also make tests do http resolve over proxy?
-
 */
 
 var (
@@ -153,14 +150,14 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 	close(responseChan)
 
 	if x.err != nil {
-		log.Print(x.err.Error() + " on request " + req.String())
+		log.Printf("ERROR: %s on request %q", x.err, req)
 		dns.HandleFailed(w, req)
 		return
 	}
 
 	// assuming miekg/dns handles possible indefinite write blocking
 	if err := w.WriteMsg(x.Msg); err != nil {
-		log.Print(err.Error() + " on request " + req.String())
+		log.Printf("ERROR WriteMsg(): %s on request %q", x.err, req)
 		dns.HandleFailed(w, req)
 		return
 	}
@@ -190,11 +187,11 @@ type server struct {
 	httpProxyServer  *goproxy.ProxyHttpServer
 	httpProxyAddress string
 
-	//// Errors []error?  and errorMu?  addError() func that deals with mutex?
-	//// and Errors() function to get errors?...
-	//// track last 100 errors by default
+	// Track and report all errors
 }
 
+/*
+// BUG: Server can't fully release resources and shutdown cleanly, as HTTP Proxy subsystem doesn't have shutdown API
 func (s *server) Shutdown() error {
 	var errors []error
 	if err := s.udpServer.Shutdown(); err != nil {
@@ -210,6 +207,7 @@ func (s *server) Shutdown() error {
 	}
 	return nil
 }
+*/
 
 func (s *server) ListenAndServe() error {
 	resChan := make(chan error, 4)
@@ -233,15 +231,15 @@ func (s *server) ListenAndServe() error {
 
 		c := new(dns.Client)
 		r, _, err := c.Exchange(m, s.udpServer.Addr)
+		if err == nil {
+			if r != nil && r.Rcode != dns.RcodeSuccess {
+				err = fmt.Errorf("invalid answer: %q", r)
+			}
+		}
 		if err != nil {
-			resChan <- err
-			return
+			log.Printf("Quick test passed of %q", m.String())
 		}
-		if r != nil && r.Rcode != dns.RcodeSuccess {
-			resChan <- fmt.Errorf("failed to get valid answer\n%v", r)
-			return
-		}
-		log.Printf("Quick test passed of %q", m.String())
+		resChan <- err
 	}()
 
 	// Return first error early, don't block on all subsystems returning
@@ -315,9 +313,7 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 		httpProxyServer:  httpProxyServer,
 		httpProxyAddress: httpProxy,
 	}
-	// ignore errors; would get 'server not started' error if client never kicks
-	// off server.
-	runtime.SetFinalizer(s, (*server).Shutdown)
+	//runtime.SetFinalizer(s, (*server).Shutdown)
 	return s, nil
 }
 
