@@ -62,91 +62,107 @@ type proxyRequest struct {
 	response chan proxyResponse
 }
 
-func handleRequest(req *dns.Msg, dlr *dialer) (*dns.Msg, error) {
-	// timer expiration (+1) and DNS write/read completes (+1) == 2
-	done := make(chan proxyResponse, 2)
+func handleRequest(req *dns.Msg, dlr *dialer, done chan<- proxyResponse) {
+	// dial() can block for a few seconds;
+	// actual duration can be queried by getsockopt()
+	conn, err := dlr.Dial()
+	if err != nil {
+		done <- proxyResponse{nil, err}
+		return
+	}
 
-	go func() {
-		// dial() can block for a few seconds;
-		// actual duration can be queried by getsockopt()
-		conn, err := dlr.Dial()
-		if err != nil {
-			done <- proxyResponse{nil, err}
-			return
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("conn.Close() error: %v", err.Error())
 		}
-
-		defer func() {
-			if err := conn.Close(); err != nil {
-				log.Printf("conn.Close() error: %v", err.Error())
-			}
-		}()
-
-		if isTransfer(req) {
-			err := errors.New("need to handle transfers!")
-			done <- proxyResponse{nil, err}
-			return
-
-			/*
-				// from: https://github.com/StalkR/dns-reverse-proxy
-				if transport != "tcp" {
-					log.Printf("ERROR: isTransfer==true and transport==", transport)
-					dns.HandleFailed(w, req)
-					return
-				}
-				t := new(dns.Transfer)
-				c, err := t.In(req, addr)
-				if err != nil {
-					log.Print("ERROR: " + err.Error())
-					dns.HandleFailed(w, req)
-					return
-				}
-				if err = t.Out(w, req, c); err != nil {
-					log.Print("ERROR: " + err.Error())
-					dns.HandleFailed(w, req)
-					return
-				}
-				return
-			*/
-		}
-
-		dnsConn := &dns.Conn{Conn: conn}
-		if err := dnsConn.WriteMsg(req); err != nil {
-			done <- proxyResponse{nil, err}
-			return
-		}
-
-		resp, err := dnsConn.ReadMsg()
-		if err != nil {
-			done <- proxyResponse{nil, err}
-			return
-
-		} else if resp.Id != req.Id {
-			err := fmt.Errorf("ERROR: resp.Id %v != req.Id %v", resp.Id, req.Id)
-			done <- proxyResponse{nil, err}
-			return
-		}
-		resp.RecursionAvailable = true
-		done <- proxyResponse{resp, nil}
 	}()
 
-	select {
-	case <-time.After(10 * time.Second):
-		err := errors.New("general timeout")
-		return nil, err
+	if isTransfer(req) {
+		err := errors.New("need to handle transfers!")
+		done <- proxyResponse{nil, err}
+		return
 
-	case r := <-done:
-		return r.Msg, r.err
+		/*
+			// from: https://github.com/StalkR/dns-reverse-proxy
+			if transport != "tcp" {
+				log.Printf("ERROR: isTransfer==true and transport==", transport)
+				dns.HandleFailed(w, req)
+				return
+			}
+			t := new(dns.Transfer)
+			c, err := t.In(req, addr)
+			if err != nil {
+				log.Print("ERROR: " + err.Error())
+				dns.HandleFailed(w, req)
+				return
+			}
+			if err = t.Out(w, req, c); err != nil {
+				log.Print("ERROR: " + err.Error())
+				dns.HandleFailed(w, req)
+				return
+			}
+			return
+		*/
 	}
+
+	dnsConn := &dns.Conn{Conn: conn}
+	if err := dnsConn.WriteMsg(req); err != nil {
+		done <- proxyResponse{nil, err}
+		return
+	}
+
+	resp, err := dnsConn.ReadMsg()
+	if err != nil {
+		done <- proxyResponse{nil, err}
+		return
+
+	} else if resp.Id != req.Id {
+		err := fmt.Errorf("ERROR: resp.Id %v != req.Id %v", resp.Id, req.Id)
+		done <- proxyResponse{nil, err}
+		return
+	}
+	resp.RecursionAvailable = true
+	done <- proxyResponse{resp, nil}
 }
 
-func proxyWorker(c chan proxyRequest, d1, d2 *dialer) {
+func proxyWorker(c chan proxyRequest, dialer1, dialer2 *dialer) {
 	for req := range c {
-		resp, err := handleRequest(req.Msg, d1)
-		// Try backup DNS remote if it's defined
-		if err != nil && d2 != nil {
-			resp, err = handleRequest(req.Msg, d2)
+		// timer expiration (+1) and two handleRequest completes (+2) == 3
+		done := make(chan proxyResponse, 3)
+
+		// Don't wait for timeouts, fire both requests at once
+		go handleRequest(req.Msg, dialer1, done)
+		go handleRequest(req.Msg, dialer2, done)
+
+		select {
+		case <-time.After(10 * time.Second):
+			err := errors.New("general timeout")
+			req.response <- proxyResponse{nil, err}
+
+		case r := <-done:
+			if r.err != nil {
+				// Try waiting for other response
+				select {
+				case <-time.After(250 * time.Millisecond):
+					// keep original error
+					break
+				case r2 := <-done:
+					// Override; r2 may be successful.  If r2 is an error, we're only replacing an error w/ an error.
+					r = r2
+				}
+			}
+
+			req.response <- r
 		}
-		req.response <- proxyResponse{resp, err}
+
+		/*
+			resp, err := handleRequest(req.Msg, d1)
+			// Try backup DNS remote if it's defined
+			if err != nil && d2 != nil {
+				resp, err = handleRequest(req.Msg, d2)
+			}
+			req.response <- proxyResponse{resp, err}
+		*/
 	}
 }
 
