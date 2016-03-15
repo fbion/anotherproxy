@@ -29,9 +29,8 @@ TODO: singleflight optimization?
 TODO: integrate github disconnect blocklists (use go generate?)
 
 
-NEXT NEXT TODO: round robin and/or failover remote DNS support?  no response from 8.8.8.8, so use 8.8.4.4?
-https://golang.org/pkg/flag/#example_
-
+TODO: Consider forwarding vs recursing...
+https://github.com/mesosphere/mesos-dns/pull/307
 
 */
 
