@@ -302,6 +302,9 @@ func newServer(localDNS string, remoteDNS []string, httpProxy, socks5Proxy strin
 		dns_dialer2 = &dialer{remoteDNS[1], socks5Proxy}
 		log.Printf("Remote DNS %v", remoteDNS[1])
 	}
+	if len(remoteDNS) > 2 {
+		log.Printf("Ignoring anything beyond first two remote DNS servers: %v", remoteDNS[2:])
+	}
 
 	log.Printf("Local DNS address %v", localDNS)
 
