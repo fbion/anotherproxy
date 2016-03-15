@@ -11,7 +11,9 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -24,6 +26,7 @@ Other miekg/dns implementations:
 
 TODO: stats every 5 min?  or dump to collector/query engine and handle there?
 TODO: singleflight optimization?
+TODO: integrate github disconnect blocklists (use go generate?)
 
 
 NEXT NEXT TODO: round robin and/or failover remote DNS support?  no response from 8.8.8.8, so use 8.8.4.4?
@@ -36,7 +39,7 @@ var (
 	_localDNS    = flag.String("localdns", "127.0.0.1:53", "Address:port for local DNS requests")
 	_socks5Proxy = flag.String("socks5", "", "SOCKS5 address:port")
 	_httpProxy   = flag.String("httpproxy", "127.0.0.1:8080", "Address:port for local HTTP proxy")
-	_remoteDNS   = flag.String("remotedns", "8.8.8.8:53", "Address:port of upstream DNS server")
+	_remoteDNS   = flag.String("remotedns", "8.8.8.8:53,8.8.4.4:53", "Address:port of upstream DNS servers (comma seperated for multiple values)")
 )
 
 func isTransfer(req *dns.Msg) bool {
@@ -59,7 +62,7 @@ type proxyRequest struct {
 	response chan proxyResponse
 }
 
-func proxyWorkerFunc(req *dns.Msg, dlr *dialer) (*dns.Msg, error) {
+func handleRequest(req *dns.Msg, dlr *dialer) (*dns.Msg, error) {
 	// timer expiration (+1) and DNS write/read completes (+1) == 2
 	done := make(chan proxyResponse, 2)
 
@@ -136,9 +139,13 @@ func proxyWorkerFunc(req *dns.Msg, dlr *dialer) (*dns.Msg, error) {
 	}
 }
 
-func proxyWorker(c chan proxyRequest, d *dialer) {
+func proxyWorker(c chan proxyRequest, d1, d2 *dialer) {
 	for req := range c {
-		resp, err := proxyWorkerFunc(req.Msg, d)
+		resp, err := handleRequest(req.Msg, d1)
+		// Try backup DNS remote if it's defined
+		if err != nil && d2 != nil {
+			resp, err = handleRequest(req.Msg, d2)
+		}
 		req.response <- proxyResponse{resp, err}
 	}
 }
@@ -256,20 +263,33 @@ func (s *server) ListenAndServe() error {
 	return nil
 }
 
-func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers int) (*server, error) {
+func newServer(localDNS string, remoteDNS []string, httpProxy, socks5Proxy string, numWorkers int) (*server, error) {
 	if socks5Proxy == "" {
 		return nil, errors.New("No SOCKS5 proxy specified")
 	}
+	log.Printf("Using SOCKS5 proxy %v", socks5Proxy)
+
 	if httpProxy == "" {
 		return nil, errors.New("No HTTP proxy specified")
 	}
-
-	log.Printf("Using SOCKS5 proxy %v", socks5Proxy)
-	log.Printf("Local DNS address %v", localDNS)
-	log.Printf("Upstream DNS %v", remoteDNS)
 	log.Printf("HTTP proxy address %v", httpProxy)
 
-	dns_dialer := &dialer{remoteDNS, socks5Proxy}
+	if len(remoteDNS) == 0 || len(remoteDNS[0]) == 0 {
+		return nil, errors.New("No remote DNS specified")
+	}
+	log.Printf("Remote DNS %v", remoteDNS[0])
+
+	// only consider 2 DNS servers, ignore everything after
+	dns_dialer1 := &dialer{remoteDNS[0], socks5Proxy}
+	var dns_dialer2 *dialer = nil
+	if len(remoteDNS) > 1 && len(remoteDNS[1]) > 0 {
+		dns_dialer2 = &dialer{remoteDNS[1], socks5Proxy}
+		log.Printf("Remote DNS %v", remoteDNS[1])
+	}
+
+	log.Printf("Local DNS address %v", localDNS)
+
+	// TODO LEFTOFF: continue multiple remote DNS work here... probably need []dialers for dns_dialer..
 	http_dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
 	if err != nil {
 		return nil, err
@@ -277,7 +297,8 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 
 	jobQueue := make(chan proxyRequest, numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		go proxyWorker(jobQueue, dns_dialer)
+		// XXX hmm
+		go proxyWorker(jobQueue, dns_dialer1, dns_dialer2)
 	}
 
 	serveMux := dns.NewServeMux()
@@ -323,8 +344,15 @@ func newServer(localDNS, remoteDNS, httpProxy, socks5Proxy string, numWorkers in
 
 func main() {
 	flag.Parse()
+	if len(os.Args) == 1 {
+		flag.Usage()
+		os.Exit(1)
+	}
+
 	numWorkers := runtime.NumCPU() * 4
-	s, err := newServer(*_localDNS, *_remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
+	remoteDNS := strings.Split(*_remoteDNS, ",")
+
+	s, err := newServer(*_localDNS, remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
 	if err != nil {
 		log.Fatal(err)
 	}
