@@ -23,7 +23,6 @@ e.g.,
 
 ## Install notes
 ```
-go install github.com/zeroshirts/anotherproxy
 sudo setcap 'cap_net_bind_service=+ep' $GOPATH/bin/anotherproxy
 ```
 
