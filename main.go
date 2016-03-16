@@ -6,9 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/elazarl/goproxy"
+	"github.com/golang/glog"
 	"github.com/miekg/dns"
 	"golang.org/x/net/proxy"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -73,7 +73,7 @@ func handleRequest(req *dns.Msg, dlr *dialer, done chan<- proxyResponse) {
 
 	defer func() {
 		if err := conn.Close(); err != nil {
-			log.Printf("conn.Close() error: %v", err.Error())
+			glog.Errorf("conn.Close() error: %v", err.Error())
 		}
 	}()
 
@@ -160,9 +160,8 @@ func proxyWorker(c chan proxyRequest, dialer1, dialer2 *dialer) {
 }
 
 func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
-	reqDebug := req.Copy()
 	if len(req.Question) == 0 {
-		log.Print("ERROR: len(req.Question)==0")
+		glog.Error("ERROR: len(req.Question)==0")
 		dns.HandleFailed(w, req)
 		return
 	}
@@ -173,20 +172,20 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 	close(responseChan)
 
 	if x.err != nil {
-		log.Printf("ERROR: %s on request %q", x.err, req)
+		glog.Errorf("ERROR: %s on request %q", x.err, req)
 		dns.HandleFailed(w, req)
 		return
 	}
 
 	// assuming miekg/dns handles possible indefinite write blocking
 	if err := w.WriteMsg(x.Msg); err != nil {
-		log.Printf("ERROR WriteMsg(): %s on request %q", x.err, req)
+		glog.Errorf("ERROR WriteMsg(): %s on request %q", x.err, req)
 		dns.HandleFailed(w, req)
 		return
 	}
-
-	//debug
-	log.Printf("QUERY %q ----->\n%q", reqDebug, x.Msg.String())
+	if glog.V(2) {
+		glog.Infof("QUERY %q\n ---> %q", req, x.Msg.String())
+	}
 }
 
 type dialer struct {
@@ -260,7 +259,8 @@ func (s *server) ListenAndServe() error {
 			}
 		}
 		if err == nil {
-			log.Printf("Quick test passed of %q", m.String())
+			glog.Infof("Quick test passed of %q", m.String())
+			glog.Flush() // useful if user is 'tail -f'ign the glog output
 		}
 		resChan <- err
 	}()
@@ -279,30 +279,30 @@ func newServer(localDNS string, remoteDNS []string, httpProxy, socks5Proxy strin
 	if socks5Proxy == "" {
 		return nil, errors.New("No SOCKS5 proxy specified")
 	}
-	log.Printf("Using SOCKS5 proxy %v", socks5Proxy)
+	glog.Infof("Using SOCKS5 proxy %v", socks5Proxy)
 
 	if httpProxy == "" {
 		return nil, errors.New("No HTTP proxy specified")
 	}
-	log.Printf("HTTP proxy address %v", httpProxy)
+	glog.Infof("HTTP proxy address %v", httpProxy)
 
 	if len(remoteDNS) == 0 || len(remoteDNS[0]) == 0 {
 		return nil, errors.New("No remote DNS specified")
 	}
-	log.Printf("Remote DNS %v", remoteDNS[0])
+	glog.Infof("Remote DNS %v", remoteDNS[0])
 
 	// only consider 2 DNS servers, ignore everything after
 	dns_dialer1 := &dialer{remoteDNS[0], socks5Proxy}
 	var dns_dialer2 *dialer = nil
 	if len(remoteDNS) > 1 && len(remoteDNS[1]) > 0 {
 		dns_dialer2 = &dialer{remoteDNS[1], socks5Proxy}
-		log.Printf("Remote DNS %v", remoteDNS[1])
+		glog.Infof("Remote DNS %v", remoteDNS[1])
 	}
 	if len(remoteDNS) > 2 {
-		log.Printf("Ignoring anything beyond first two remote DNS servers: %v", remoteDNS[2:])
+		glog.Infof("Ignoring anything beyond first two remote DNS servers: %v", remoteDNS[2:])
 	}
 
-	log.Printf("Local DNS address %v", localDNS)
+	glog.Infof("Local DNS address %v", localDNS)
 
 	http_dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
 	if err != nil {
@@ -367,10 +367,10 @@ func main() {
 
 	s, err := newServer(*_localDNS, remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
 	if err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 
 	if err := s.ListenAndServe(); err != nil {
-		log.Fatal(err)
+		glog.Fatal(err)
 	}
 }
