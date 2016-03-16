@@ -160,6 +160,7 @@ func proxyWorker(c chan proxyRequest, dialer1, dialer2 *dialer) {
 }
 
 func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
+	reqDebug := req.Copy()
 	if len(req.Question) == 0 {
 		log.Print("ERROR: len(req.Question)==0")
 		dns.HandleFailed(w, req)
@@ -183,7 +184,9 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 		dns.HandleFailed(w, req)
 		return
 	}
-	////log.Print(x.Msg.String())
+
+	//debug
+	log.Printf("QUERY %q ----->\n%q", reqDebug, x.Msg.String())
 }
 
 type dialer struct {
@@ -301,7 +304,6 @@ func newServer(localDNS string, remoteDNS []string, httpProxy, socks5Proxy strin
 
 	log.Printf("Local DNS address %v", localDNS)
 
-	// TODO LEFTOFF: continue multiple remote DNS work here... probably need []dialers for dns_dialer..
 	http_dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, proxy.Direct)
 	if err != nil {
 		return nil, err
@@ -309,7 +311,6 @@ func newServer(localDNS string, remoteDNS []string, httpProxy, socks5Proxy strin
 
 	jobQueue := make(chan proxyRequest, numWorkers)
 	for i := 0; i < numWorkers; i++ {
-		// XXX hmm
 		go proxyWorker(jobQueue, dns_dialer1, dns_dialer2)
 	}
 
