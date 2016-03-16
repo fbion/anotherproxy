@@ -31,6 +31,7 @@ TODO: integrate github disconnect blocklists (use go generate?)
 
 TODO: Consider forwarding vs recursing...
 https://github.com/mesosphere/mesos-dns/pull/307
+- https://github.com/mesosphere/mesos-dns/issues/297
 
 */
 
