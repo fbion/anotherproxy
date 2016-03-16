@@ -131,7 +131,9 @@ func proxyWorker(c chan proxyRequest, dialer1, dialer2 *dialer) {
 		done := make(chan proxyResponse, 3)
 
 		// Don't wait for timeouts, fire both requests at once
-		go handleRequest(req.Msg, dialer1, done)
+		// XXX is it safe to duplicate the Msg MsgHdr ID in this case?  query is the same...
+		reqMsgCopy := req.Msg.Copy() // avoids data race
+		go handleRequest(reqMsgCopy, dialer1, done)
 		go handleRequest(req.Msg, dialer2, done)
 
 		select {
@@ -154,15 +156,6 @@ func proxyWorker(c chan proxyRequest, dialer1, dialer2 *dialer) {
 
 			req.response <- r
 		}
-
-		/*
-			resp, err := handleRequest(req.Msg, d1)
-			// Try backup DNS remote if it's defined
-			if err != nil && d2 != nil {
-				resp, err = handleRequest(req.Msg, d2)
-			}
-			req.response <- proxyResponse{resp, err}
-		*/
 	}
 }
 
