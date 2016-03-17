@@ -121,7 +121,8 @@ func handleRequest(req *dns.Msg, dlr *dialer, done chan<- proxyResponse) {
 		done <- proxyResponse{nil, err}
 		return
 	}
-	resp.RecursionAvailable = true
+	// XXX should we be setting RecursionAvailable?  We're just a forwarder..right?
+	////resp.RecursionAvailable = true
 	done <- proxyResponse{resp, nil}
 }
 
