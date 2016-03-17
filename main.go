@@ -165,6 +165,9 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 		dns.HandleFailed(w, req)
 		return
 	}
+	if glog.V(3) {
+		glog.Infof("QUERY %q", req)
+	}
 
 	responseChan := make(chan proxyResponse, 0)
 	jobQueue <- proxyRequest{req, responseChan}
@@ -184,7 +187,7 @@ func route(w dns.ResponseWriter, req *dns.Msg, jobQueue chan proxyRequest) {
 		return
 	}
 	if glog.V(2) {
-		glog.Infof("QUERY %q\n ---> %q", req, x.Msg.String())
+		glog.Infof("%q", x.Msg)
 	}
 }
 
@@ -364,6 +367,11 @@ func main() {
 
 	numWorkers := runtime.NumCPU() * 4
 	remoteDNS := strings.Split(*_remoteDNS, ",")
+
+	glog.CopyStandardLogTo("INFO")
+	glog.CopyStandardLogTo("WARNING")
+	glog.CopyStandardLogTo("ERROR")
+	glog.CopyStandardLogTo("FATAL")
 
 	s, err := newServer(*_localDNS, remoteDNS, *_httpProxy, *_socks5Proxy, numWorkers)
 	if err != nil {
